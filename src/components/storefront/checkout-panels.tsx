@@ -1,12 +1,9 @@
-import { Banknote } from "lucide-react";
+import { CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/form";
+import { Field, Input, Textarea } from "@/components/ui/form";
 import { useCart } from "@/lib/cart";
 import { useI18n } from "@/lib/i18n-context";
 import { formatDzd } from "@/lib/format";
-import { WILAYAS } from "@/lib/wilayas";
-import { useStoreSettings } from "@/lib/queries";
-import { useCommunes } from "@/lib/communes";
 import type { CheckoutForm } from "@/lib/checkout-form";
 
 export function AddressFields({
@@ -17,18 +14,22 @@ export function AddressFields({
   onChange: (next: CheckoutForm) => void;
 }) {
   const { t, locale } = useI18n();
-  const { data: settings } = useStoreSettings();
-  const communes = useCommunes(form.wilaya);
   const set = <K extends keyof CheckoutForm>(key: K, value: CheckoutForm[K]) =>
-    onChange({ ...form, [key]: value });
+    onChange({ ...form, [key]: value, wilaya: "Alger", commune: "Digital" });
 
-  // Restrict the picker to wilayas the owner actually serves. An empty list
-  // means everywhere. The database enforces the same rule, so this is courtesy
-  // rather than control — but offering 69 options when 6 are served is how a
-  // buyer picks one that gets rejected at the last step.
-  const allowed = settings?.delivery_wilayas ?? [];
-  const deliverable =
-    allowed.length === 0 ? WILAYAS : WILAYAS.filter((w) => allowed.includes(w.fr));
+  const emailLabel =
+    locale === "ar"
+      ? "البريد الإلكتروني (لتفعيل الاشتراك أو استلام الحساب)"
+      : locale === "fr"
+        ? "Adresse E-mail (pour recevoir l'abonnement)"
+        : "Email Address (for subscription delivery)";
+
+  const whatsappLabel =
+    locale === "ar"
+      ? "رقم الهاتف (واتساب للتواصل السريع)"
+      : locale === "fr"
+        ? "Numéro de téléphone (WhatsApp)"
+        : "Phone Number (WhatsApp)";
 
   return (
     <div className="flex flex-col gap-4 rounded-[16px] border border-outline bg-surface p-6">
@@ -45,7 +46,7 @@ export function AddressFields({
         />
       </Field>
 
-      <Field label={t("checkout.phone")} hint={t("checkout.phoneHint")} required>
+      <Field label={whatsappLabel} required>
         <Input
           value={form.phone}
           onChange={(e) => set("phone", e.target.value)}
@@ -59,63 +60,17 @@ export function AddressFields({
         />
       </Field>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={t("checkout.wilaya")} required>
-          <Select
-            value={form.wilaya}
-            // A new wilaya invalidates the commune and the pickup office chosen
-            // for the old one.
-            onChange={(e) =>
-              onChange({
-                ...form,
-                wilaya: e.target.value,
-                commune: "",
-                delivery_method: "home",
-                stopdesk_id: "",
-                stopdesk_name: "",
-              })
-            }
-            required
-          >
-            <option value="">{t("checkout.selectWilaya")}</option>
-            {deliverable.map((w) => (
-              <option key={w.code} value={w.fr}>
-                {String(w.code).padStart(2, "0")} — {locale === "ar" ? w.ar : w.fr}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field
-          label={t("checkout.commune")}
-          hint={communes.length > 0 ? t("checkout.communeHint") : undefined}
-        >
-          <Input
-            value={form.commune}
-            onChange={(e) => set("commune", e.target.value)}
-            maxLength={80}
-            list="commune-options"
-            autoComplete="address-level2"
-          />
-          {/* Suggestions, not a lock: a commune missing from the list can still be typed. */}
-          <datalist id="commune-options">
-            {communes.map(([latin, arabic]) => (
-              <option key={latin} value={latin}>
-                {arabic}
-              </option>
-            ))}
-          </datalist>
-        </Field>
-      </div>
-
-      <Field label={t("checkout.address")} hint={t("checkout.addressHint")} required>
-        <Textarea
+      <Field label={emailLabel} required>
+        <Input
           value={form.address}
           onChange={(e) => set("address", e.target.value)}
+          type="email"
+          dir="ltr"
+          autoComplete="email"
+          placeholder="example@gmail.com"
           required
           minLength={5}
           maxLength={500}
-          rows={3}
         />
       </Field>
 
@@ -123,6 +78,11 @@ export function AddressFields({
         <Textarea
           value={form.note}
           onChange={(e) => set("note", e.target.value)}
+          placeholder={
+            locale === "ar"
+              ? "مثال: الدفع عبر البطاقة الذهبية / أريد التفعيل على حسابي..."
+              : ""
+          }
           maxLength={1000}
           rows={2}
         />
@@ -131,35 +91,40 @@ export function AddressFields({
   );
 }
 
-/** Cash-on-delivery reassurance. Above the fold on purpose: it is the reason
- *  a first-time Algerian buyer completes the order. */
 export function CodNotice() {
-  const { t } = useI18n();
+  const { locale } = useI18n();
   return (
     <p className="flex items-start gap-3 rounded-[16px] border border-primary/30 bg-primary/5 p-4 text-sm">
-      <Banknote size={18} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+      <CreditCard size={18} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
       <span>
-        <strong className="block font-medium">{t("checkout.codTitle")}</strong>
-        <span className="text-on-surface-muted">{t("checkout.codBody")}</span>
+        <strong className="block font-medium">
+          {locale === "ar"
+            ? "دفع إلكتروني آمن عبر البطاقة الذهبية و CIB (Chargily Pay)"
+            : "Paiement sécurisé via EDAHABIA & CIB (Chargily Pay)"}
+        </strong>
+        <span className="text-on-surface-muted">
+          {locale === "ar"
+            ? "تسليم رقمي فوري للاشتراك مباشرة بعد تأكيد الدفع (بدون رسوم توصيل)."
+            : "Livraison numérique instantanée après paiement (0 DZD frais de livraison)."}
+        </span>
       </span>
     </p>
   );
 }
 
 export function CheckoutSummary({
-  deliveryFee,
-  hasWilaya,
   error,
   submitting,
 }: {
-  deliveryFee: number;
-  hasWilaya: boolean;
+  deliveryFee?: number;
+  hasWilaya?: boolean;
+  subtotal?: number;
+  deliverySource?: string;
   error: string | null;
   submitting: boolean;
 }) {
   const { t, locale } = useI18n();
   const { items, subtotal } = useCart();
-  const total = subtotal + deliveryFee;
 
   return (
     <aside className="flex flex-col gap-4 self-start rounded-[16px] border border-outline bg-surface p-6 lg:sticky lg:top-24">
@@ -183,21 +148,17 @@ export function CheckoutSummary({
 
       <dl className="flex flex-col gap-2 border-t border-outline pt-4 text-sm">
         <div className="flex justify-between">
-          <dt className="text-on-surface-muted">{t("cart.subtotal")}</dt>
-          <dd className="font-mono" dir="ltr">
-            {formatDzd(subtotal, locale)}
-          </dd>
-        </div>
-        <div className="flex justify-between">
-          <dt className="text-on-surface-muted">{t("cart.delivery")}</dt>
-          <dd className="font-mono" dir="ltr">
-            {hasWilaya ? formatDzd(deliveryFee, locale) : t("cart.deliveryCalculated")}
+          <dt className="text-on-surface-muted">
+            {locale === "ar" ? "التسليم الرقمي" : "Livraison numérique"}
+          </dt>
+          <dd className="font-mono text-positive font-semibold" dir="ltr">
+            {locale === "ar" ? "مجاني (0 د.ج)" : "Gratuit (0 DZD)"}
           </dd>
         </div>
         <div className="flex justify-between border-t border-outline pt-2 text-base font-semibold">
           <dt>{t("common.total")}</dt>
           <dd className="font-mono text-primary" dir="ltr">
-            {formatDzd(total, locale)}
+            {formatDzd(subtotal, locale)}
           </dd>
         </div>
       </dl>
@@ -209,7 +170,11 @@ export function CheckoutSummary({
       )}
 
       <Button type="submit" variant="berry" size="lg" disabled={submitting}>
-        {submitting ? t("checkout.placing") : t("checkout.placeOrder")}
+        {submitting
+          ? t("checkout.placing")
+          : locale === "ar"
+            ? "ادفع الآن عبر Chargily Pay"
+            : "Payer avec Chargily Pay"}
       </Button>
     </aside>
   );

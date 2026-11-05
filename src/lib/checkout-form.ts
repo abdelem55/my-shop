@@ -1,9 +1,5 @@
 import type { DeliveryMethod } from "./delivery";
 
-/**
- * The buyer's address form, shared by the checkout page and the order form on
- * the product page, so both send the database the same fields.
- */
 export type CheckoutForm = {
   customer_name: string;
   phone: string;
@@ -19,8 +15,8 @@ export type CheckoutForm = {
 export const EMPTY_CHECKOUT_FORM: CheckoutForm = {
   customer_name: "",
   phone: "",
-  wilaya: "",
-  commune: "",
+  wilaya: "Alger",
+  commune: "Digital",
   address: "",
   note: "",
   delivery_method: "home",
@@ -32,12 +28,12 @@ export function toCustomer(form: CheckoutForm) {
   return {
     customer_name: form.customer_name,
     phone: form.phone,
-    wilaya: form.wilaya,
-    commune: form.commune || null,
-    address: form.address,
+    wilaya: form.wilaya || "Alger",
+    commune: form.commune || "Digital",
+    address: form.address, // يحمل البريد الإلكتروني للزبون
     note: form.note || null,
-    delivery_method: form.delivery_method,
-    stopdesk_id: form.stopdesk_id || null,
-    stopdesk_name: form.stopdesk_name || null,
+    delivery_method: "home" as const,
+    stopdesk_id: null,
+    stopdesk_name: null,
   };
 }

@@ -4,22 +4,13 @@ import { CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddressFields } from "@/components/storefront/checkout-panels";
 import { CopyBox } from "@/components/storefront/copy-box";
-import { DeliveryChoice } from "@/components/storefront/delivery-choice";
-import { isDemoShop } from "@/components/storefront/demo-banner";
 import { EMPTY_CHECKOUT_FORM, toCustomer, type CheckoutForm } from "@/lib/checkout-form";
-import { pickupFee, resolveDelivery, useDeliveryZones } from "@/lib/delivery";
 import { formatDzd } from "@/lib/format";
 import { useI18n } from "@/lib/i18n-context";
 import { placeOrder } from "@/lib/order";
 import { useStoreSettings, type CatalogueVariant } from "@/lib/queries";
+import { getSupabase } from "@/lib/supabase/client";
 
-/**
- * The order form on the product page. Most Algerian buyers order where they pick
- * the size, without a cart: this places the chosen variant straight away, with
- * the same fields and the same database checks as the checkout. The cart stays
- * for buyers who want several products. Totals here are display only; the
- * database computes the total it stores.
- */
 export function QuickOrder({
   selected,
   quantity,
@@ -29,8 +20,8 @@ export function QuickOrder({
 }) {
   const { t, locale } = useI18n();
   const { data: settings } = useStoreSettings();
-  const { data: zones } = useDeliveryZones();
   const [form, setForm] = useState<CheckoutForm>(EMPTY_CHECKOUT_FORM);
+  const [paymentMethod, setPaymentMethod] = useState<"edahabia" | "cib">("edahabia");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<string | null>(null);
@@ -39,24 +30,21 @@ export function QuickOrder({
   if (settings && !settings.accepts_cod) return null;
 
   const subtotal = selected.price * quantity;
-  const wilaya = form.wilaya || null;
-  const delivery = resolveDelivery(
-    settings ?? null,
-    zones ?? [],
-    wilaya,
-    subtotal,
-    form.delivery_method,
-  );
-  const homeFee = resolveDelivery(settings ?? null, zones ?? [], wilaya, subtotal).fee;
-  const pickup = pickupFee(zones ?? [], wilaya);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
-    const result = await placeOrder(toCustomer(form), [{ variant_id: selected.id, quantity }]);
-    setSubmitting(false);
+
+    const customerData = toCustomer({
+      ...form,
+      note: `الدفع: ${paymentMethod.toUpperCase()} | الإيميل: ${form.address} ${form.note ? `| ${form.note}` : ""}`,
+    });
+
+    const result = await placeOrder(customerData, [{ variant_id: selected.id, quantity }]);
+
     if (result.error || !result.token) {
+      setSubmitting(false);
       setError(
         result.code
           ? t(`checkout.error.${result.code}`)
@@ -64,6 +52,33 @@ export function QuickOrder({
       );
       return;
     }
+
+    // استدعاء دالة Supabase Edge Function لإنشاء رابط الدفع في Chargily Pay
+    try {
+      const { data: checkoutData, error: fnError } = await getSupabase().functions.invoke(
+        "create-chargily-checkout",
+        {
+          body: {
+            public_token: result.token,
+            amount: subtotal,
+            customer_name: form.customer_name,
+            phone: form.phone,
+            email: form.address,
+            payment_method: paymentMethod,
+            description: `اشتراك رقمي (#${result.token.slice(0, 8)})`,
+          },
+        }
+      );
+
+      if (!fnError && checkoutData?.checkout_url) {
+        window.location.href = checkoutData.checkout_url;
+        return;
+      }
+    } catch {
+      // في حال لم يتم تفعيل دالة Edge Function بعد، نعرض صفحة نجاح الطلب مع رمز التتبع
+    }
+
+    setSubmitting(false);
     setPlaced(result.token);
   };
 
@@ -84,53 +99,68 @@ export function QuickOrder({
       onSubmit={submit}
       className="flex scroll-mt-24 flex-col gap-4 border-t border-outline pt-5"
     >
-      <h2 className="font-display text-lg font-semibold">{t("quick.title")}</h2>
-      {isDemoShop && (
-        <p
-          role="note"
-          className="rounded-[10px] border border-tertiary/40 bg-tertiary/10 px-4 py-3 text-sm font-medium"
-        >
-          {t("demo.checkout")}
-        </p>
-      )}
+      <h2 className="font-display text-lg font-semibold">
+        {locale === "ar" ? "شراء فوري واستلام رقمي" : t("quick.title")}
+      </h2>
+
       <AddressFields form={form} onChange={setForm} />
-      <DeliveryChoice
-        wilaya={form.wilaya}
-        homeFee={homeFee}
-        // Free delivery covers pickup too, so both options show the same 0.
-        pickupFee={pickup === null ? null : delivery.source === "free" ? 0 : pickup}
-        method={form.delivery_method}
-        officeId={form.stopdesk_id}
-        onChange={({ method, officeId, officeName }) =>
-          setForm({
-            ...form,
-            delivery_method: method,
-            stopdesk_id: officeId,
-            stopdesk_name: officeName,
-          })
-        }
-      />
+
+      <div className="flex flex-col gap-2 rounded-[16px] border border-outline bg-surface p-4">
+        <span className="text-sm font-medium">
+          {locale === "ar" ? "اختر بطاقة الدفع (Chargily Pay)" : "Mode de paiement (Chargily Pay)"}
+        </span>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setPaymentMethod("edahabia")}
+            className={`rounded-[10px] border p-3 text-sm font-semibold transition ${
+              paymentMethod === "edahabia"
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-outline hover:border-primary/40"
+            }`}
+          >
+            {locale === "ar" ? "البطاقة الذهبية (EDAHABIA)" : "EDAHABIA"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPaymentMethod("cib")}
+            className={`rounded-[10px] border p-3 text-sm font-semibold transition ${
+              paymentMethod === "cib"
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-outline hover:border-primary/40"
+            }`}
+          >
+            {locale === "ar" ? "بطاقة CIB" : "Carte CIB"}
+          </button>
+        </div>
+      </div>
+
       <dl className="flex flex-col gap-2 rounded-[12px] bg-surface-mid p-4 text-sm">
         {row(t("cart.subtotal"), formatDzd(subtotal, locale))}
         {row(
-          t("cart.delivery"),
-          wilaya ? formatDzd(delivery.fee, locale) : t("cart.deliveryCalculated"),
+          locale === "ar" ? "التسليم الرقمي" : "Livraison numérique",
+          locale === "ar" ? "مجاني (0 د.ج)" : "Gratuit (0 DZD)"
         )}
-        {row(t("common.total"), formatDzd(subtotal + (wilaya ? delivery.fee : 0), locale), true)}
+        {row(t("common.total"), formatDzd(subtotal, locale), true)}
       </dl>
+
       {error && (
         <p className="rounded-[10px] bg-error/10 px-3 py-2 text-sm text-error" role="alert">
           {error}
         </p>
       )}
+
       <Button type="submit" variant="berry" size="lg" disabled={submitting}>
-        {submitting ? t("checkout.placing") : t("quick.submit")}
+        {submitting
+          ? t("checkout.placing")
+          : locale === "ar"
+            ? `ادفع الآن (${formatDzd(subtotal, locale)}) عبر Chargily Pay`
+            : `Payer (${formatDzd(subtotal, locale)}) via Chargily Pay`}
       </Button>
     </form>
   );
 }
 
-/** Same message as after a cart checkout, in place of the form. */
 function QuickOrderPlaced({ token, phone }: { token: string; phone: string }) {
   const { t } = useI18n();
   return (

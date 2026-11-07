@@ -11,10 +11,9 @@ import { useCart } from "@/lib/cart";
 import { translate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n-context";
 import { useStoreSettings } from "@/lib/queries";
-import { pickupFee, resolveDelivery, useDeliveryZones } from "@/lib/delivery";
-import { DeliveryChoice } from "@/components/storefront/delivery-choice";
 import { isDemoShop } from "@/components/storefront/demo-banner";
 import { placeOrder } from "@/lib/order";
+import { getSupabase } from "@/lib/supabase/client";
 
 export const Route = createFileRoute("/checkout")({
   head: ({ match }) => ({ meta: [{ title: translate(match.context.locale, "checkout.title") }] }),
@@ -25,7 +24,6 @@ function CheckoutPage() {
   const { t } = useI18n();
   const cart = useCart();
   const { data: settings } = useStoreSettings();
-  const { data: zones } = useDeliveryZones();
 
   const [form, setForm] = useState<CheckoutForm>(EMPTY_CHECKOUT_FORM);
   const [submitting, setSubmitting] = useState(false);
@@ -34,29 +32,10 @@ function CheckoutPage() {
 
   if (placedToken) return <OrderPlaced token={placedToken} phone={form.phone} />;
 
-  // The owner can close the shop without deleting it. Cash on delivery is the
-  // only payment method, so `accepts_cod = false` means no orders at all. The
-  // database refuses them too, via validate_order.
   if (settings && !settings.accepts_cod) {
     return <NothingToCheckOut title={t("shop.closed")} body={t("shop.closedBody")} />;
   }
   if (cart.items.length === 0) return <NothingToCheckOut title={t("cart.empty")} />;
-
-  const delivery = resolveDelivery(
-    settings ?? null,
-    zones ?? [],
-    form.wilaya || null,
-    cart.subtotal,
-    form.delivery_method,
-  );
-  // The home price is shown next to the pickup price, whichever is chosen.
-  const homeFee = resolveDelivery(
-    settings ?? null,
-    zones ?? [],
-    form.wilaya || null,
-    cart.subtotal,
-  ).fee;
-  const pickup = pickupFee(zones ?? [], form.wilaya || null);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -66,10 +45,8 @@ function CheckoutPage() {
       toCustomer(form),
       cart.items.map((line) => ({ variant_id: line.variantId, quantity: line.quantity })),
     );
-    setSubmitting(false);
     if (result.error || !result.token) {
-      // Known refusals are translated; anything else is the database's own message,
-      // which is written for a human.
+      setSubmitting(false);
       setError(
         result.code
           ? t(`checkout.error.${result.code}`)
@@ -77,6 +54,33 @@ function CheckoutPage() {
       );
       return;
     }
+
+    try {
+      const { data: checkoutData, error: fnError } = await getSupabase().functions.invoke(
+        "create-chargily-checkout",
+        {
+          body: {
+            public_token: result.token,
+            amount: cart.subtotal,
+            customer_name: form.customer_name,
+            phone: form.phone,
+            email: form.address,
+            payment_method: "edahabia",
+            description: `طلب اشتراكات رقمية (#${result.token.slice(0, 8)})`,
+          },
+        }
+      );
+
+      if (!fnError && checkoutData?.checkout_url) {
+        cart.clear();
+        window.location.href = checkoutData.checkout_url;
+        return;
+      }
+    } catch {
+      // المتابعة لصفحة تأكيد الطلب
+    }
+
+    setSubmitting(false);
     cart.clear();
     setPlacedToken(result.token);
   };
@@ -107,31 +111,18 @@ function CheckoutPage() {
               </p>
             )}
             <AddressFields form={form} onChange={setForm} />
-            <DeliveryChoice
-              wilaya={form.wilaya}
-              homeFee={homeFee}
-              // Free delivery covers pickup too, so both options show the same 0.
-              pickupFee={pickup === null ? null : delivery.source === "free" ? 0 : pickup}
-              method={form.delivery_method}
-              officeId={form.stopdesk_id}
-              onChange={({ method, officeId, officeName }) =>
-                setForm({
-                  ...form,
-                  delivery_method: method,
-                  stopdesk_id: officeId,
-                  stopdesk_name: officeName,
-                })
-              }
-            />
             <CodNotice />
           </div>
 
-          <CheckoutSummary
-            deliveryFee={delivery.fee}
-            hasWilaya={Boolean(form.wilaya)}
-            error={error}
-            submitting={submitting}
-          />
+          <div>
+            <CheckoutSummary
+              subtotal={cart.subtotal}
+              deliveryFee={0}
+              hasWilaya={true}
+              submitting={submitting}
+              error={error}
+            />
+          </div>
         </form>
       </div>
     </StoreLayout>
@@ -142,39 +133,32 @@ function OrderPlaced({ token, phone }: { token: string; phone: string }) {
   const { t } = useI18n();
   return (
     <StoreLayout>
-      <div className="container-page flex flex-col items-center gap-5 py-20 text-center">
-        <CheckCircle2 size={40} className="text-positive" aria-hidden="true" />
-        <h1 className="font-display text-2xl font-semibold">{t("checkout.orderPlaced")}</h1>
-        <p className="max-w-md text-on-surface-muted">{t("checkout.orderPlacedBody", { phone })}</p>
-        <div className="flex w-full max-w-md flex-col gap-2 text-start">
-          <p className="text-sm font-medium">{t("order.copyHint")}</p>
-          <CopyBox value={token} />
+      <div className="container-page py-16 text-center">
+        <div className="mx-auto flex max-w-md flex-col items-center gap-4">
+          <CheckCircle2 size={56} className="text-primary" />
+          <h1 className="font-display text-2xl font-semibold sm:text-3xl">
+            {t("checkout.successTitle")}
+          </h1>
+          <p className="text-on-surface-muted">{t("checkout.successMessage", { phone })}</p>
+          <div className="mt-2 w-full text-start">
+            <CopyBox label={t("checkout.tokenLabel")} value={token} />
+          </div>
+          <p className="text-xs text-on-surface-muted">{t("checkout.tokenHint")}</p>
+          <Button asChild className="mt-4">
+            <Link to="/">{t("cart.continueShopping")}</Link>
+          </Button>
         </div>
-        <Button asChild size="lg">
-          <Link to="/order/$token" params={{ token }}>
-            {t("checkout.trackNow")}
-          </Link>
-        </Button>
       </div>
     </StoreLayout>
   );
 }
 
-/** An empty cart, or a shop that is not taking orders: say so and point back. */
 function NothingToCheckOut({ title, body }: { title: string; body?: string }) {
   const { t } = useI18n();
   return (
     <StoreLayout>
-      <div className="container-page py-16">
-        <EmptyState
-          title={title}
-          body={body}
-          action={
-            <Button asChild variant="secondary">
-              <Link to="/">{t("cart.emptyAction")}</Link>
-            </Button>
-          }
-        />
+      <div className="container-page py-16 text-center">
+        <EmptyState title={title} description={body} actionLabel={t("cart.continueShopping")} actionTo="/" />
       </div>
     </StoreLayout>
   );
